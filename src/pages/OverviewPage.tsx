@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { OFFICIAL_SOURCES, REAL_CASES } from '../data/benchmarks';
 import type { NavSection } from '../types';
+import { formatPercentPtBr } from '../utils/metrics';
 
 interface OverviewPageProps {
   onNavigate: (section: NavSection) => void;
@@ -107,7 +108,9 @@ export function OverviewPage({
               <div className="flex justify-between">
                 <span className="text-teal-100">Precisão atual:</span>
                 <span className="font-bold">
-                  {evaluatedCount > 0 ? `${accuracyPercent}%` : 'Aguardando'}
+                  {evaluatedCount > 0
+                    ? formatPercentPtBr(accuracyPercent)
+                    : 'Aguardando'}
                 </span>
               </div>
               <div className="flex justify-between">

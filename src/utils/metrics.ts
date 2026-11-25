@@ -1,3 +1,4 @@
+import { HOSPITAL_SECTORS } from '../types';
 import type { EmailScenario, HospitalSector, ScenarioDecision } from '../types';
 
 /** Benchmarks oficiais citados no roteiro do projeto */
@@ -19,7 +20,16 @@ export interface SimulationSummary {
   phishingReportedCount: number;
   phishingEvaluatedCount: number;
   accuracyPercent: number;
-  currentClickRatePercent: number;
+  observedClickRatePercent: number | null;
+  benchmarkClickRatePercent: number;
+}
+
+function didClickTrap(decision: ScenarioDecision): boolean {
+  return (
+    decision.hadTrapClick === true ||
+    decision.action === 'clicked' ||
+    decision.firstAction === 'clicked'
+  );
 }
 
 export function computeSimulationSummary(
@@ -27,7 +37,9 @@ export function computeSimulationSummary(
   decisions: Record<string, ScenarioDecision>
 ): SimulationSummary {
   const scenarioMap = new Map(scenarios.map((s) => [s.id, s]));
-  const decisionList = Object.values(decisions).filter((d) => scenarioMap.has(d.scenarioId));
+  const decisionList = Object.entries(decisions)
+    .filter(([key]) => Object.hasOwn(decisions, key) && scenarioMap.has(key))
+    .map(([, d]) => d);
 
   let correctCount = 0;
   let phishingClickedCount = 0;
@@ -38,13 +50,15 @@ export function computeSimulationSummary(
     const scenario = scenarioMap.get(decision.scenarioId);
     if (!scenario) continue;
 
-    if (decision.isCorrect) {
+    const clickedTrap = didClickTrap(decision);
+
+    if (decision.isCorrect && !clickedTrap) {
       correctCount += 1;
     }
 
     if (scenario.isPhishing) {
       phishingEvaluatedCount += 1;
-      if (decision.action === 'clicked') {
+      if (clickedTrap) {
         phishingClickedCount += 1;
       } else if (decision.action === 'reported') {
         phishingReportedCount += 1;
@@ -56,10 +70,10 @@ export function computeSimulationSummary(
   const accuracyPercent =
     evaluatedCount > 0 ? Math.round((correctCount / evaluatedCount) * 100) : 0;
 
-  const currentClickRatePercent =
+  const observedClickRatePercent =
     phishingEvaluatedCount > 0
       ? Math.round((phishingClickedCount / phishingEvaluatedCount) * 1000) / 10
-      : BENCHMARKS.BASELINE_PHISHING_CLICK_RATE;
+      : null;
 
   return {
     totalScenarios: scenarios.length,
@@ -69,7 +83,8 @@ export function computeSimulationSummary(
     phishingReportedCount,
     phishingEvaluatedCount,
     accuracyPercent,
-    currentClickRatePercent,
+    observedClickRatePercent,
+    benchmarkClickRatePercent: BENCHMARKS.BASELINE_PHISHING_CLICK_RATE,
   };
 }
 
@@ -78,6 +93,8 @@ export interface SectorMetric {
   baselineRiskPercent: number;
   evaluated: number;
   correct: number;
+  trapClicks: number;
+  falsePositives: number;
   currentRiskPercent: number;
 }
 
@@ -92,35 +109,49 @@ export function computeSectorMetrics(
   scenarios: EmailScenario[],
   decisions: Record<string, ScenarioDecision>
 ): SectorMetric[] {
-  const sectors: HospitalSector[] = [
-    'Laboratório',
-    'Recepção',
-    'Enfermagem',
-    'Faturamento',
-  ];
-
-  return sectors.map((sector) => {
+  return HOSPITAL_SECTORS.map((sector) => {
     const sectorScenarios = scenarios.filter((s) => s.sector === sector);
+    const scenarioById = new Map(sectorScenarios.map((s) => [s.id, s]));
     const sectorDecisions = sectorScenarios
-      .map((s) => decisions[s.id])
+      .map((s) => (Object.hasOwn(decisions, s.id) ? decisions[s.id] : undefined))
       .filter((d): d is ScenarioDecision => Boolean(d));
 
     const evaluated = sectorDecisions.length;
-    const correct = sectorDecisions.filter((d) => d.isCorrect).length;
+    let correct = 0;
+    let trapClicks = 0;
+    let falsePositives = 0;
+
+    for (const d of sectorDecisions) {
+      const scenario = scenarioById.get(d.scenarioId);
+      if (!scenario) continue;
+      const clickedTrap = didClickTrap(d);
+
+      if (d.isCorrect && !clickedTrap) {
+        correct += 1;
+      }
+      if (scenario.isPhishing && clickedTrap) {
+        trapClicks += 1;
+      } else if (!scenario.isPhishing && (clickedTrap || d.action !== 'marked_safe')) {
+        falsePositives += 1;
+      }
+    }
+
     const baselineRiskPercent = SECTOR_BASELINES[sector];
 
     // Quando o setor ainda não foi avaliado, mantém a linha de base de referência.
-    // Quando avaliado, reflete o risco observado na simulação.
+    // Quando avaliado, reflete o risco observado real na simulação (0% se sem erros).
     const currentRiskPercent =
       evaluated === 0
         ? baselineRiskPercent
-        : Math.max(4, Math.round(((evaluated - correct) / evaluated) * 100));
+        : Math.round(((evaluated - correct) / evaluated) * 100);
 
     return {
       sector,
       baselineRiskPercent,
       evaluated,
       correct,
+      trapClicks,
+      falsePositives,
       currentRiskPercent,
     };
   });
@@ -131,6 +162,7 @@ export interface RoiEstimate {
   avgBreachCostBrl: number;
   costRatioTimesCheaper: number;
   netSavingsIfOneIncidentPreventedBrl: number;
+  isCostEffective: boolean;
 }
 
 export function calculateTrainingRoi(
@@ -138,23 +170,42 @@ export function calculateTrainingRoi(
   monthlyCostPerEmployeeBrl: number,
   avgBreachCostBrl: number = BENCHMARKS.AVG_BREACH_COST_BRL
 ): RoiEstimate {
-  const safeStaff = Math.max(1, staffCount);
-  const safeMonthlyCost = Math.max(1, monthlyCostPerEmployeeBrl);
-  const annualTrainingCostBrl = safeStaff * safeMonthlyCost * 12;
-  const costRatioTimesCheaper = Math.max(
-    1,
-    Math.round(avgBreachCostBrl / annualTrainingCostBrl)
-  );
-  const netSavingsIfOneIncidentPreventedBrl = Math.max(
-    0,
-    avgBreachCostBrl - annualTrainingCostBrl
-  );
+  const safeBreachCost =
+    Number.isFinite(avgBreachCostBrl) && avgBreachCostBrl > 0
+      ? Math.min(1_000_000_000, avgBreachCostBrl)
+      : BENCHMARKS.AVG_BREACH_COST_BRL;
+
+  if (
+    !Number.isFinite(staffCount) ||
+    !Number.isFinite(monthlyCostPerEmployeeBrl) ||
+    staffCount <= 0 ||
+    Math.trunc(staffCount) <= 0 ||
+    monthlyCostPerEmployeeBrl <= 0
+  ) {
+    return {
+      annualTrainingCostBrl: 0,
+      avgBreachCostBrl: safeBreachCost,
+      costRatioTimesCheaper: 0,
+      netSavingsIfOneIncidentPreventedBrl: 0,
+      isCostEffective: false,
+    };
+  }
+
+  const safeStaff = Math.min(100_000, Math.max(1, Math.trunc(staffCount)));
+  const safeMonthlyCost = Math.min(100_000, monthlyCostPerEmployeeBrl);
+  const annualTrainingCostBrl = Math.round(safeStaff * safeMonthlyCost * 12);
+  const rawRatio = safeBreachCost / annualTrainingCostBrl;
+  const costRatioTimesCheaper =
+    rawRatio >= 1 ? Math.round(rawRatio) : Math.round(rawRatio * 100) / 100;
+  const netSavingsIfOneIncidentPreventedBrl =
+    safeBreachCost - annualTrainingCostBrl;
 
   return {
     annualTrainingCostBrl,
-    avgBreachCostBrl,
+    avgBreachCostBrl: safeBreachCost,
     costRatioTimesCheaper,
     netSavingsIfOneIncidentPreventedBrl,
+    isCostEffective: annualTrainingCostBrl < safeBreachCost,
   };
 }
 
@@ -164,4 +215,19 @@ export function formatCurrencyBrl(value: number): string {
     currency: 'BRL',
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+export function formatPercentPtBr(
+  value: number,
+  maximumFractionDigits = 1
+): string {
+  const safeValue = Number.isFinite(value)
+    ? Object.is(value, -0)
+      ? 0
+      : value
+    : 0;
+  const formatted = new Intl.NumberFormat('pt-BR', {
+    maximumFractionDigits,
+  }).format(safeValue);
+  return `${formatted}%`;
 }

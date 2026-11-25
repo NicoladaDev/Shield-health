@@ -23,7 +23,7 @@ Este guia sincroniza as falas dos 4 apresentadores do roteiro **"A segurança na
 - **Tela:** Clique no botão branco do topo **Testar Simulação do Laboratório**.
 - **Ação ao vivo:**
   1. Mostre o e-mail exato do roteiro: `URGENTE: resultado crítico de paciente aguardando validação`.
-  2. Passe o mouse sobre o botão **Validar resultado crítico agora** para revelar o domínio falso `http://login-laudo-critico.net/auth/session-capture`.
+  2. Passe o mouse sobre o botão **Validar resultado crítico agora** para revelar o domínio falso `http://login-laudo-critico.invalid/auth/session-capture`.
   3. (Opcional) Clique primeiro no link para mostrar o **modal educativo seguro** ("Nenhum dado real foi exposto") ou clique direto em **Reportar Phishing à TI**.
   4. Mostre o **Raio-X dos Sinais** destacando remetente externo, urgência artificial e link sem HTTPS.
 

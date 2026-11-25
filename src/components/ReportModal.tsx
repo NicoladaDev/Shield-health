@@ -1,30 +1,28 @@
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock, ShieldAlert, X } from 'lucide-react';
-import type { HospitalSector, IncidentChannel, IncidentReport } from '../types';
+import { useModalAccessibility } from '../hooks/useModalAccessibility';
+import { HOSPITAL_SECTORS, INCIDENT_CHANNELS } from '../types';
+import type {
+  HospitalSector,
+  IncidentChannel,
+  IncidentReport,
+  ReportIncidentResult,
+} from '../types';
 import type { CreateIncidentInput } from '../store/usePlatformStore';
 import { calculateAnpdDeadline, formatPtBrDateTime } from '../utils/anpd';
-import { containsPotentialCpf, INPUT_LIMITS } from '../utils/validation';
+import {
+  containsSensitiveHealthIdentifier,
+  INPUT_LIMITS,
+  sanitizeText,
+  stripControlAndBidiChars,
+} from '../utils/validation';
 
 interface ReportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (input: CreateIncidentInput) => IncidentReport;
+  onSubmit: (input: CreateIncidentInput) => ReportIncidentResult;
   onGoToDashboard: () => void;
 }
-
-const SECTORS: HospitalSector[] = [
-  'Laboratório',
-  'Recepção',
-  'Enfermagem',
-  'Faturamento',
-];
-
-const CHANNELS: IncidentChannel[] = [
-  'E-mail de phishing',
-  'Link ou tela de login falsa',
-  'Mensagem WhatsApp / SMS',
-  'Acesso indevido a prontuário',
-];
 
 export function ReportModal({
   isOpen,
@@ -37,39 +35,84 @@ export function ReportModal({
   const [summary, setSummary] = useState('');
   const [involvesSensitiveHealthData, setInvolvesSensitiveHealthData] = useState(true);
   const [createdReport, setCreatedReport] = useState<IncidentReport | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const hasCpfWarning = containsPotentialCpf(summary);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const sectorInputId = useId();
+  const channelInputId = useId();
+  const summaryInputId = useId();
+  const sensitiveCheckboxId = useId();
+
+  function handleResetAndClose() {
+    setSector('Laboratório');
+    setChannel('E-mail de phishing');
+    setSummary('');
+    setInvolvesSensitiveHealthData(true);
+    setCreatedReport(null);
+    setSubmitError(null);
+    onClose();
+  }
+
+  const { titleId } = useModalAccessibility({
+    isOpen,
+    onClose: handleResetAndClose,
+    containerRef: dialogRef,
+  });
+
+  const strippedSummary = stripControlAndBidiChars(
+    summary,
+    INPUT_LIMITS.INCIDENT_SUMMARY,
+    false
+  );
+  const sensitiveCheck = containsSensitiveHealthIdentifier(strippedSummary);
+  const hasCpfWarning = sensitiveCheck.hasCpf;
+  const hasSensitiveHealthAdvisory =
+    !sensitiveCheck.hasCpf &&
+    (sensitiveCheck.hasCns || sensitiveCheck.hasExplicitDocumentPattern);
 
   if (!isOpen) return null;
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (hasCpfWarning) return;
-    const report = onSubmit({
+
+    const cleanedForSubmit = sanitizeText(
+      summary,
+      INPUT_LIMITS.INCIDENT_SUMMARY
+    );
+    if (!cleanedForSubmit) {
+      setSubmitError(
+        'Descreva brevemente o ocorrido antes de enviar o alerta à TI.'
+      );
+      return;
+    }
+
+    const result = onSubmit({
       sector,
       channel,
-      summary:
-        summary.trim() ||
-        `Suspeita de ${channel.toLowerCase()} reportada pelo setor de ${sector}.`,
+      summary,
       involvesSensitiveHealthData,
     });
-    setCreatedReport(report);
-  }
-
-  function handleResetAndClose() {
-    setCreatedReport(null);
-    setSummary('');
-    onClose();
+    if (!result.ok) {
+      setSubmitError(result.error);
+      return;
+    }
+    setSubmitError(null);
+    setCreatedReport(result.incident);
   }
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
+      className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 print:hidden"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="report-modal-title"
+      aria-labelledby={titleId}
     >
-      <div className="bg-white rounded-t-3xl sm:rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg max-h-[92dvh] flex flex-col overflow-hidden">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="bg-white rounded-t-3xl sm:rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg max-h-[92dvh] flex flex-col overflow-hidden focus:outline-none"
+      >
         <div className="px-5 sm:px-6 py-4 bg-rose-50 border-b border-rose-100 flex items-center justify-between gap-2 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center">
@@ -77,7 +120,7 @@ export function ReportModal({
             </div>
             <div>
               <h2
-                id="report-modal-title"
+                id={titleId}
                 className="text-base font-bold text-slate-900"
               >
                 Canal de Alerta Rápido à TI
@@ -153,18 +196,26 @@ export function ReportModal({
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 overflow-y-auto">
+          <form
+            noValidate
+            onSubmit={handleSubmit}
+            className="p-5 sm:p-6 space-y-4 overflow-y-auto"
+          >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                <label
+                  htmlFor={sectorInputId}
+                  className="block text-xs font-semibold text-slate-700 mb-1.5"
+                >
                   Seu setor no hospital
                 </label>
                 <select
+                  id={sectorInputId}
                   value={sector}
                   onChange={(e) => setSector(e.target.value as HospitalSector)}
                   className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
                 >
-                  {SECTORS.map((s) => (
+                  {HOSPITAL_SECTORS.map((s) => (
                     <option key={s} value={s}>
                       {s}
                     </option>
@@ -173,15 +224,19 @@ export function ReportModal({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                <label
+                  htmlFor={channelInputId}
+                  className="block text-xs font-semibold text-slate-700 mb-1.5"
+                >
                   Tipo de suspeita
                 </label>
                 <select
+                  id={channelInputId}
                   value={channel}
                   onChange={(e) => setChannel(e.target.value as IncidentChannel)}
                   className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
                 >
-                  {CHANNELS.map((c) => (
+                  {INCIDENT_CHANNELS.map((c) => (
                     <option key={c} value={c}>
                       {c}
                     </option>
@@ -192,7 +247,10 @@ export function ReportModal({
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-semibold text-slate-700">
+                <label
+                  htmlFor={summaryInputId}
+                  className="block text-xs font-semibold text-slate-700"
+                >
                   Descreva brevemente o ocorrido (sem dados reais de pacientes)
                 </label>
                 <span className="text-[11px] text-slate-400">
@@ -200,23 +258,51 @@ export function ReportModal({
                 </span>
               </div>
               <textarea
+                id={summaryInputId}
                 rows={3}
                 maxLength={INPUT_LIMITS.INCIDENT_SUMMARY}
                 value={summary}
-                onChange={(e) => setSummary(e.target.value)}
+                onChange={(e) => {
+                  setSummary(e.target.value);
+                  if (submitError) setSubmitError(null);
+                }}
                 placeholder="Ex.: Recebi e-mail pedindo login urgente para validar exame crítico com domínio estranho."
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400"
               />
               {hasCpfWarning && (
-                <p className="mt-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                <p
+                  role="alert"
+                  className="mt-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"
+                >
                   Proteção LGPD: detectamos um padrão semelhante a CPF no texto.
                   Remova dados pessoais reais de pacientes antes de enviar o alerta.
                 </p>
               )}
+              {hasSensitiveHealthAdvisory && (
+                <p
+                  role="status"
+                  className="mt-1.5 text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+                >
+                  Aviso LGPD: detectamos possível menção a CNS, RG ou prontuário.
+                  Confirme que não há identificadores reais de pacientes antes de enviar.
+                </p>
+              )}
+              {submitError && !hasCpfWarning && (
+                <p
+                  role="alert"
+                  className="mt-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"
+                >
+                  {submitError}
+                </p>
+              )}
             </div>
 
-            <label className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200 cursor-pointer">
+            <label
+              htmlFor={sensitiveCheckboxId}
+              className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200 cursor-pointer"
+            >
               <input
+                id={sensitiveCheckboxId}
                 type="checkbox"
                 checked={involvesSensitiveHealthData}
                 onChange={(e) =>

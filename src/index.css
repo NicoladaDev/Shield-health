@@ -3,7 +3,7 @@
 @layer base {
   html,
   body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background-color: #f8fafc;
     color: #0f172a;
     overflow-x: clip;
@@ -13,7 +13,7 @@
   code,
   pre,
   .font-mono {
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
   /* Prevent iOS Safari auto-zoom when focusing form controls on mobile */
@@ -35,4 +35,17 @@ select:focus-visible,
 textarea:focus-visible {
   outline: 2px solid #0d9488;
   outline-offset: 2px;
+}
+
+@media print {
+  @page {
+    margin: 1.5cm;
+  }
+
+  html,
+  body {
+    background-color: #ffffff;
+    color: #0f172a;
+    overflow: visible;
+  }
 }
